@@ -177,9 +177,6 @@ BEGIN
     RETURN v_json;
 
 EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        -- Retourner un message JSON disant que le film n'existe pas
-        RETURN '{"error":"Film non trouvé pour l\'ID ' || p_film_id || '"}';
     WHEN OTHERS THEN
         RETURN '{"erreur":"Erreur interne"}';
 END;
@@ -206,8 +203,8 @@ BEGIN
   SELECT JSON_OBJECT(
            'jeux' VALUE JSON_ARRAYAGG(
              JSON_OBJECT(
-               'id'       VALUE t.id,
-               'titre'    VALUE t.titre,
+               'id'       VALUE t.idJeu,
+               'titre'    VALUE t.titreJeu,
                'popscore' VALUE t.popscore,
                'rang'     VALUE t.rang
              )
@@ -218,14 +215,25 @@ BEGIN
       SELECT 
         J.idJeu,
         J.titreJeu,
-        (0.5*P1.visits + 0.25*P1.played + 0.15*P1.playing + 0.10*P1."Want to Play") AS popscore,
-        RANK() OVER (
-          ORDER BY (0.5*P1.visits + 0.25*P1.played + 0.15*P1.playing + 0.10*P1."Want to Play") DESC
-        ) AS rang
-      FROM JEU J
-      JOIN MODEMULTIJOUEUR MM ON MM.idJeu = J.idJeu
-      JOIN POPULARITE P1 ON P1.idJeu = J.idJeu
-      WHERE MM.idPlateforme = id_plateforme
+        (0.5 * SUM(CASE WHEN P1.mesurePopularite = 'visits' THEN P1.valeurpopularite ELSE 0 END) +
+         0.25 * SUM(CASE WHEN P1.mesurePopularite = 'played' THEN P1.valeurpopularite ELSE 0 END) +
+         0.15 * SUM(CASE WHEN P1.mesurePopularite = 'playing' THEN P1.valeurpopularite ELSE 0 END) +
+         0.10 * SUM(CASE WHEN P1.mesurePopularite = 'Want to Play' THEN P1.valeurpopularite ELSE 0 END)
+        ) AS popscore,
+    
+      RANK() OVER (
+        ORDER BY (
+          0.5 * SUM(CASE WHEN P1.mesurePopularite = 'visits' THEN P1.valeurpopularite ELSE 0 END) +
+          0.25 * SUM(CASE WHEN P1.mesurePopularite = 'played' THEN P1.valeurpopularite ELSE 0 END) +
+          0.15 * SUM(CASE WHEN P1.mesurePopularite = 'playing' THEN P1.valeurpopularite ELSE 0 END) +
+          0.10 * SUM(CASE WHEN P1.mesurePopularite = 'Want to Play' THEN P1.valeurpopularite ELSE 0 END)
+        ) DESC
+    ) AS rang
+
+FROM JEU J
+JOIN MODEMULTIJOUEUR MM ON MM.idJeu = J.idJeu
+JOIN POPULARITE P1 ON P1.idJeu = J.idJeu
+WHERE MM.idPlateforme = id_plateforme
     ) t
    WHERE t.rang <= 100;
 
@@ -234,11 +242,49 @@ END;
 /
 
 // Procédure AJOUTER_DATE_SORTIE
-CREATE OR REPLACE PROCEDURE AJOUTER_DATE_SORTIE (p_id_date_sortie IN DATESORTIE.idDateSortie%TYPE)
+CREATE OR REPLACE PROCEDURE AJOUTER_DATE_SORTIE(
+    p_idJeu         IN NUMBER,
+    p_idPlateforme  IN NUMBER,
+    p_dateSortie    IN DATE,
+    p_regionSortie  IN VARCHAR2,
+    p_statut        IN VARCHAR2
+) IS
+    v_count NUMBER;
 BEGIN
+    -- Vérification 1 : Jeu inexistant
+    SELECT COUNT(*) INTO v_count FROM JEU WHERE idJeu = p_idJeu;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Jeu inexistant');
+    END IF;
 
+    -- Vérification 2 : Plateforme inexistante
+    SELECT COUNT(*) INTO v_count FROM PLATEFORME WHERE idPlateforme = p_idPlateforme;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Plateforme inexistante');
+    END IF;
+
+    -- Vérification 3 : Région inconnue
+    SELECT COUNT(*) INTO v_count FROM REGION WHERE nomRegion = p_regionSortie;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Région inconnue');
+    END IF;
+
+    -- Vérification 4 : Doublon de sortie (même jeu + plateforme + région)
+    SELECT COUNT(*) INTO v_count
+    FROM DATESORTIE
+    WHERE idJeu = p_idJeu AND idPlateforme = p_idPlateforme AND regionSortie = p_regionSortie;
+    
+    IF v_count > 0 THEN
+        RAISE_APPLICATION_ERROR(-20004, 'Sortie déjà enregistrée');
+    END IF;
+
+    -- Insertion de la nouvelle sortie
+    INSERT INTO DATESORTIE (idJeu, idPlateforme, dateSortie, regionSortie, statutSortie)
+    VALUES (p_idJeu, p_idPlateforme, p_dateSortie, p_regionSortie, p_statut);
+    
 END;
 /
+
 
 // Procédure AJOUTER_MODE_MULTIJOUEUR
 CREATE OR REPLACE PROCEDURE AJOUTER_MODE_MULTIJOUEUR (p_id_mode_multijoueur IN MODEMULTIJOUEUR.idModeMultijoueur%TYPE)
@@ -246,4 +292,3 @@ BEGIN
 
 END;
 /
-
