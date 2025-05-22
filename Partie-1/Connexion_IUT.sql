@@ -60,6 +60,11 @@ IS
     v_count NUMBER;
 BEGIN
 
+    SELECT COUNT(*) INTO v_count FROM JEU WHERE idJeu = p_id_Jeu;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Jeu inexistant');
+    END IF;
+
     SELECT JSON_OBJECT(
         'titre' VALUE J.TitreJeu,
         'résumé' VALUE J.ResumeJeu,
@@ -119,16 +124,19 @@ BEGIN
     WHERE J.IdJeu = p_id_jeu;
 
     RETURN v_json;
-
+    
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
         RETURN '{"erreur":"Jeu innexistant"}';
     WHEN OTHERS THEN
         RETURN '{"erreur":"Erreur interne"}';
+
 END;
 /
 
-SELECT FICHE_DETAILLEE(127842678642) AS resultat_json FROM DUAL;
+SELECT FICHE_DETAILLEE(129113) AS resultat_json FROM DUAL;
+
+SELECT idJeu FROM Jeu;
 
 // Fontcion MEILLEURS_JEUX
 CREATE OR REPLACE FUNCTION MEILLEURS_JEUX(id_plateforme IN NUMBER)
