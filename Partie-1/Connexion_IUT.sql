@@ -118,7 +118,8 @@ BEGIN
         'nb votes' VALUE J.NombreNotesJeu,
         'score critiques' VALUE J.ScoreIGDB,
         'nb votes critiques' VALUE J.NombreNotesIGDBJeu
-
+    
+    RETURNING CLOB
     ) INTO v_json
     FROM JEU J
     WHERE J.IdJeu = p_id_jeu;
