@@ -1,0 +1,18 @@
+:
+EDITEUR: idEditeur, nomEditeur
+:
+EDITEURJEU: #idEditeur>EDITEUR>idEditeur, _#idJeu>JEU>idJeu
+:
+DEVELOPPEURJEU: #idDeveloppeur>DEVELOPPEUR>idDeveloppeur, _#idJeu>JEU>idJeu
+:
+DEVELOPPEUR: idDeveloppeur, nomDeveloppeur
+
+SERIE: idSerie, nomSerie
+:
+SERIEJEU: #idSerie>SERIE>idSerie, _#idJeu>JEU>idJeu
+:
+JEU: idJeu
+:
+PERSPECTIVEJOUEURJEU: #idPerspectiveJoueur>PERSPECTIVEJOUEUR>idPerspectiveJoueur, _#idJeu>JEU>idJeu
+:
+PERSPECTIVEJOUEUR: idPerspectiveJoueur, nomPerspectiveJoueur

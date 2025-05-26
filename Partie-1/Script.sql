@@ -52,6 +52,38 @@ WHERE DS.datesortie <= SYSDATE
 GROUP BY J.idJeu, J.titreJeu, DS.datesortie
 ORDER BY DS.datesortie DESC, J.titrejeu ASC;
 
+// Vue FICHE_JEU
+CREATE OR REPLACE VIEW FICHE_JEU AS
+    SELECT j.IDJEU AS identifiant,
+ j.TITREJEU AS titre,
+ MIN(ds.DATESORTIE) AS premiere_date_sortie,
+ COALESCE(j.STATUTJEU, 'Publié') AS statut,
+
+    -- Liste des compagnies d�veloppeuses
+    LISTAGG(DISTINCT CASE WHEN CJ.estDeveloppeur = 1 THEN c.nomcompagnie END, ', ') WITHIN GROUP (ORDER BY c.nomcompagnie) AS compagnies,
+
+    -- Liste des genres
+    LISTAGG(DISTINCT g.nomgenre, ', ') WITHIN GROUP (ORDER BY g.nomgenre) AS genres,
+
+    -- Liste des plateformes
+    LISTAGG(DISTINCT p.nomplateforme, ', ') WITHIN GROUP (ORDER BY p.nomplateforme) AS plateformes,
+
+    ROUND(CAST(j.SCOREIGDB AS NUMBER) / 10, 2) AS score_utilisateur,
+    ROUND(CAST(j.SCOREAGREGEJEU AS NUMBER) / 10, 2) AS score_critique
+
+FROM
+    jeu J
+    LEFT JOIN datesortie DS ON J.idjeu = DS.idjeu
+    LEFT JOIN compagniejeu CJ ON J.idjeu = CJ.idjeu
+    LEFT JOIN compagnie C ON CJ.idcompagnie = C.idcompagnie
+    LEFT JOIN genrejeu GJ ON J.idjeu = GJ.idjeu
+    LEFT JOIN genre G ON GJ.idgenre = G.idgenre
+    LEFT JOIN plateforme P ON DS.idplateforme = P.idplateforme
+
+GROUP BY
+    j.idjeu, j.titrejeu, j.statutjeu, j.SCOREIGDB, j.scoreagregeJeu
+    ORDER BY
+        j.idJeu;
 
 // Fonction FICHE_DETAILLEE
 CREATE OR REPLACE FUNCTION FICHE_DETAILLEE(p_id_jeu IN JEU.IdJeu%TYPE) RETURN CLOB
@@ -1140,8 +1172,6 @@ DROP TABLE SERIEJEU;
 DROP TABLE SERIEE;
 DROP TABLE PERSPECTIVEJOUEURJEU;
 DROP TABLE PERSPECTIVEJOUEUR;
-DROP TABLE FRANCHISEJEU;
-DROP TABLE FRANCHISEE;
 DROP TABLE EDITEURJEU;
 DROP TABLE EDITEURE;
 
@@ -1178,18 +1208,6 @@ CREATE TABLE PERSPECTIVEJOUEURJEU (
     idPerspectiveJoueur NUMBER,
     idJeu NUMBER,
     FOREIGN KEY (idPerspectiveJoueur) REFERENCES PERSPECTIVEJOUEUR(idPerspectiveJoueur),
-    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
-);
-
-CREATE TABLE FRANCHISEE (
-    idFranchise NUMBER PRIMARY KEY,
-    nomFranchise VARCHAR2(255)    
-);
-
-CREATE TABLE FRANCHISEJEU (
-    idFranchise NUMBER,
-    idJeu NUMBER,
-    FOREIGN KEY (idFranchise) REFERENCES FRANCHISE(idFranchise),
     FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
 );
 
@@ -1239,3 +1257,82 @@ INSERT INTO PERSPECTIVEJOUEUR (idPerspectiveJoueur, nomPerspectiveJoueur) VALUES
 INSERT INTO PERSPECTIVEJOUEURJEU (idPerspectiveJoueur, idJeu) VALUES (2, 4035);
 INSERT INTO SERIEE (idSerie, nomSerie) VALUES (3, 'NBA Street');
 INSERT INTO SERIEJEU (idSerie, idJeu) VALUES (3, 4035);
+
+// Vue DETAIL_SORTIE
+CREATE OR REPLACE FUNCTION DETAIL_SORTIES(p_idJeu IN NUMBER)
+RETURN CLOB
+IS
+    v_json CLOB;
+BEGIN
+    SELECT JSON_OBJECT(
+        'idJeu' VALUE j.idJeu,
+        'titre' VALUE j.titreJeu,
+        'plateformes' VALUE (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'nom' VALUE p.nomPlateforme,
+                    'regions' VALUE (
+                        SELECT JSON_ARRAYAGG(
+                            JSON_OBJECT(
+                                'nom' VALUE r.nomRegion,
+                                'dates' VALUE (
+                                    SELECT JSON_ARRAYAGG(
+                                        JSON_OBJECT(
+                                            'date' VALUE ds.dateSortie,
+                                            'statut' VALUE ds.statutSortie
+                                        ) ORDER BY ds.dateSortie
+                                    )
+                                    FROM DATESORTIE DS2
+                                    JOIN LOCALISATIONJEU LJ2 ON LJ2.idJeu = DS2.idJeu
+                                    WHERE DS2.idJeu = j.idJeu 
+                                      AND DS2.idPlateforme = DS.idPlateforme 
+                                      AND LJ2.idRegion = LJ.idRegion
+                                )
+                            ) ORDER BY r.nomRegion
+                        )
+                        FROM DATESORTIE ds
+                        JOIN LOCALISATIONJEU LJ ON LJ.idJeu = DS.idJeu
+                        JOIN REGION R ON R.idRegion = LJ.idRegion
+                        WHERE ds.idJeu = j.idJeu AND ds.idPlateforme = p.idPlateforme
+                    ),
+                    'developpeurs' VALUE (
+                        SELECT JSON_ARRAYAGG(cj.idCompagnie ORDER BY cj.idCompagnie)
+                        FROM COMPAGNIEJEU cj
+                        WHERE cj.idJeu = j.idJeu AND cj.EstDeveloppeur = 1
+                    ),
+                    'porteurs' VALUE (
+                        SELECT JSON_ARRAYAGG(cj.idCompagnie ORDER BY cj.idCompagnie)
+                        FROM COMPAGNIEJEU cj
+                        WHERE cj.idJeu = j.idJeu AND cj.EstPorteur = 1
+                    ),
+                    'publieurs' VALUE (
+                        SELECT JSON_ARRAYAGG(cj.idCompagnie ORDER BY cj.idCompagnie)
+                        FROM COMPAGNIEJEU cj
+                        WHERE cj.idJeu = j.idJeu AND cj.EstPublieur = 1
+                    ),
+                    'soutiens' VALUE (
+                        SELECT JSON_ARRAYAGG(cj.idCompagnie ORDER BY cj.idCompagnie)
+                        FROM COMPAGNIEJEU cj
+                        WHERE cj.idJeu = j.idJeu AND cj.EstSoutien = 1
+                    )
+                )
+                ORDER BY (
+                    SELECT MIN(ds.dateSortie)
+                    FROM DATESORTIE ds
+                    WHERE ds.idJeu = j.idJeu AND ds.idPlateforme = p.idPlateforme
+                )
+            )
+            FROM PLATEFORME p
+            WHERE EXISTS (
+                SELECT 1 FROM DATESORTIE ds
+                WHERE ds.idJeu = j.idJeu AND ds.idPlateforme = p.idPlateforme
+            )
+        )
+    )
+    INTO v_json
+    FROM JEU j
+    WHERE j.idJeu = p_idJeu;
+
+    RETURN v_json;
+END;
+/
