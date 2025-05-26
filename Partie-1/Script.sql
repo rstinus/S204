@@ -42,11 +42,7 @@ BEGIN
 END;
 /
 
-
-
-
-
-// Sortie Récente
+// Vue SORTIES_RECENTES
 CREATE OR REPLACE VIEW SORTIES_RECENTES AS
 SELECT J.idJeu, J.titreJeu, DS.datesortie, LISTAGG(DISTINCT P.nomplateforme, ', ') WITHIN GROUP (ORDER BY P.nomplateforme) AS plateforme
 FROM jeu J
@@ -56,11 +52,244 @@ WHERE DS.datesortie <= SYSDATE
 GROUP BY J.idJeu, J.titreJeu, DS.datesortie
 ORDER BY DS.datesortie DESC, J.titrejeu ASC;
 
-SELECT * FROM SORTIES_RECENTES;
+
+// Fonction FICHE_DETAILLEE
+CREATE OR REPLACE FUNCTION FICHE_DETAILLEE(p_id_jeu IN JEU.IdJeu%TYPE) RETURN CLOB
+IS
+    v_json CLOB;
+    v_count NUMBER;
+BEGIN
+    -- Vérifie si le jeu existe
+    SELECT COUNT(*) INTO v_count FROM JEU WHERE idJeu = p_id_jeu;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Jeu inexistant');
+    END IF;
+
+    -- Génère le JSON
+    SELECT JSON_OBJECT(
+        'titre' VALUE J.TitreJeu,
+        'résumé' VALUE J.ResumeJeu,
+
+        'mode(s) de jeu' VALUE (
+            SELECT JSON_ARRAYAGG(m.NomModalite RETURNING CLOB) 
+            FROM MODALITE M
+            JOIN MODALITEJEU MJ ON MJ.idModalite = M.idModalite
+            WHERE MJ.idJeu = J.IdJeu
+        ),
+
+        'développeur(s)' VALUE (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'id' VALUE C.IdCompagnie,
+                    'nom' VALUE C.NomCompagnie
+                RETURNING CLOB)
+                ORDER BY C.NomCompagnie
+            RETURNING CLOB)
+            FROM COMPAGNIE C
+            JOIN COMPAGNIEJeu CJ ON C.IdCompagnie = CJ.idCompagnie
+            WHERE CJ.IdJeu = J.IdJeu AND CJ.estDeveloppeur = 1
+        ),
+
+        'publieur(s)' VALUE (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'id' VALUE C.IdCompagnie,
+                    'nom' VALUE C.NomCompagnie
+                RETURNING CLOB)
+                ORDER BY C.NomCompagnie
+            RETURNING CLOB)
+            FROM COMPAGNIE C
+            JOIN COMPAGNIEJeu CJ ON C.IdCompagnie = CJ.idCompagnie
+            WHERE CJ.IdJeu = J.IdJeu AND CJ.estPublieur = 1
+        ),
+
+        'plateforme(s)' VALUE (
+            SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'nom' VALUE P.NomPlateforme,
+                    'date sortie' VALUE DS.DateSortie,
+                    'statut' VALUE NVL(DS.StatutSortie, 'Full release')
+                RETURNING CLOB)
+                ORDER BY P.NomPlateforme, DS.DateSortie
+            RETURNING CLOB)
+            FROM PLATEFORME P
+            JOIN DATESORTIE DS ON DS.idPlateforme = P.idPlateforme
+            WHERE DS.IdJeu = J.IdJeu
+        ),
+
+        'score' VALUE J.ScoreJeu,
+        'nb votes' VALUE J.NombreNotesJeu,
+        'score critiques' VALUE J.ScoreAgregeJeu,
+        'nb votes critiques' VALUE J.NombreNotesAgregeesJeu
+
+        RETURNING CLOB
+    ) INTO v_json
+    FROM JEU J
+    WHERE J.IdJeu = p_id_jeu;
+
+    RETURN v_json;
+
+END;
+/
+
+// Procédure AJOUTER_DATE_SORTIE
+CREATE OR REPLACE PROCEDURE AJOUTER_DATE_SORTIE(
+    p_idJeu         IN NUMBER,
+    p_idPlateforme  IN NUMBER,
+    p_dateSortie    IN DATE,
+    p_regionSortie  IN VARCHAR2,
+    p_statut        IN VARCHAR2
+) IS
+    v_count NUMBER;
+BEGIN
+    -- Vérification 1 : Jeu inexistant
+    SELECT COUNT(*) INTO v_count FROM JEU WHERE idJeu = p_idJeu;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Jeu inexistant');
+    END IF;
+
+    -- Vérification 2 : Plateforme inexistante
+    SELECT COUNT(*) INTO v_count FROM PLATEFORME WHERE idPlateforme = p_idPlateforme;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Plateforme inexistante');
+    END IF;
+
+    -- Vérification 3 : Région inconnue
+    SELECT COUNT(*) INTO v_count FROM REGION WHERE nomRegion = p_regionSortie;
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Region inconnue');
+    END IF;
+
+    -- Vérification 4 : Doublon de sortie (même jeu + plateforme + région)
+    SELECT COUNT(*) INTO v_count FROM DATESORTIE WHERE idJeu = p_idJeu AND idPlateforme = p_idPlateforme AND regionSortie = p_regionSortie;
+    IF v_count > 0 THEN
+        RAISE_APPLICATION_ERROR(-20004, 'Sortie deja enregistree');
+    END IF;
+
+    -- Insertion de la nouvelle sortie
+    INSERT INTO DATESORTIE (idJeu, idPlateforme, dateSortie, regionSortie, statutSortie)
+    VALUES (p_idJeu, p_idPlateforme, p_dateSortie, p_regionSortie, p_statut);
+    
+END;
+/
 
 
+// Procédure AJOUTER_MODE_MULTIJOUEUR
+CREATE OR REPLACE PROCEDURE AJOUTER_MODE_MULTIJOUEUR (
+    p_id_jeu IN NUMBER,
+    p_id_plateforme IN NUMBER,
+    p_drop_in IN NUMBER,
+    p_mode_coop_campagne IN NUMBER,
+    p_mode_coop_lan IN NUMBER,
+    p_mode_coop_offline IN NUMBER,
+    p_mode_coop_online IN NUMBER,
+    p_mode_split_screen IN NUMBER,
+    p_nb_joueurs_max_coop_offline IN NUMBER,
+    p_nb_joueurs_max_offline IN NUMBER,
+    p_nb_joueurs_max_coop_online IN NUMBER,
+    p_nb_joueurs_max_online IN NUMBER
+    
+) IS
 
+    p_count_jeu NUMBER;
+    p_count_plateforme NUMBER;
+    p_count NUMBER;
 
+BEGIN
+    
+    SELECT COUNT(*) INTO p_count_jeu FROM JEU Where idJeu = p_id_jeu;
+    IF p_count_jeu = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Jeu inexistant');
+    END IF;
+    
+    SELECT COUNT(*) INTO p_count_plateforme FROM PLATEFORME Where idPlateforme = p_id_plateforme;
+    IF p_count_plateforme = 0 THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Plateforme inexistante');
+    END IF;
+    
+    SELECT 1 INTO p_count FROM MODEMULTIJOUEUR WHERE idJeu = p_id_jeu AND idPlateforme = p_id_plateforme;
+        RAISE_APPLICATION_ERROR(-20005, 'Mode Multijoueur deja enregistre');
+
+    IF (p_mode_coop_online = 1 AND p_nb_joueurs_max_coop_online = 0) OR (p_mode_coop_online = 0 AND p_nb_joueurs_max_coop_online > 0) THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Données incohérentes : ModeCoopOnline');
+    END IF;
+
+    IF (p_mode_coop_offline = 1 AND p_nb_joueurs_max_coop_offline = 0) OR (p_mode_coop_offline = 0 AND p_nb_joueurs_max_coop_offline > 0) THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Données incohérentes : ModeCoopOffline');
+    END IF;
+
+    INSERT INTO modemultijoueur (
+        idjeu, idplateforme, DropIn, ModeCoopCampagne, ModeCoopLAN,
+        ModeCoopOffline, ModeCoopOnline, ModeSplitScreen,
+        NbJoueursMaxCoopOffline, NbJoueursMaxOffline,
+        NbJoueursMaxCoopOnline, NbJoueursMaxOnline
+    ) VALUES (
+        p_id_jeu, p_id_plateforme, p_drop_in, p_mode_coop_campagne, p_mode_coop_lan,
+        p_mode_coop_offline, p_mode_coop_online, p_mode_split_screen,
+        p_nb_joueurs_max_coop_offline, p_nb_joueurs_max_offline,
+        p_nb_joueurs_max_coop_online, p_nb_joueurs_max_online
+    );
+END;
+/
+
+// Fontcion MEILLEURS_JEUX
+CREATE OR REPLACE FUNCTION MEILLEURS_JEUX(id_plateforme IN NUMBER)
+  RETURN CLOB
+IS
+  v_json  CLOB;
+  v_count NUMBER;
+BEGIN
+  -- Vérifier que la plateforme existe
+  SELECT COUNT(*) INTO v_count
+    FROM PLATEFORME
+   WHERE idPlateforme = id_plateforme;
+  IF v_count = 0 THEN
+    RAISE_APPLICATION_ERROR(-20002, 'Plateforme inexistante');
+  END IF;
+
+  -- Construire le JSON des meilleurs jeux
+  SELECT JSON_OBJECT(
+           'jeux' VALUE JSON_ARRAYAGG(
+             JSON_OBJECT(
+               'id'       VALUE t.idJeu,
+               'titre'    VALUE t.titreJeu,
+               'popscore' VALUE t.popscore,
+               'rang'     VALUE t.rang
+             )RETURNING CLOB
+           ) RETURNING CLOB
+         )
+    INTO v_json
+    FROM (
+      SELECT 
+        J.idJeu,
+        J.titreJeu,
+        (0.5 * SUM(CASE WHEN P1.mesurePopularite = 'visits' THEN P1.valeurpopularite ELSE 0 END) +
+         0.25 * SUM(CASE WHEN P1.mesurePopularite = 'played' THEN P1.valeurpopularite ELSE 0 END) +
+         0.15 * SUM(CASE WHEN P1.mesurePopularite = 'playing' THEN P1.valeurpopularite ELSE 0 END) +
+         0.10 * SUM(CASE WHEN P1.mesurePopularite = 'Want to Play' THEN P1.valeurpopularite ELSE 0 END)
+        ) AS popscore,
+    
+      RANK() OVER (
+        ORDER BY (
+          0.5 * SUM(CASE WHEN P1.mesurePopularite = 'visits' THEN P1.valeurpopularite ELSE 0 END) +
+          0.25 * SUM(CASE WHEN P1.mesurePopularite = 'played' THEN P1.valeurpopularite ELSE 0 END) +
+          0.15 * SUM(CASE WHEN P1.mesurePopularite = 'playing' THEN P1.valeurpopularite ELSE 0 END) +
+          0.10 * SUM(CASE WHEN P1.mesurePopularite = 'Want to Play' THEN P1.valeurpopularite ELSE 0 END)
+        ) DESC
+    ) AS rang
+
+FROM JEU J
+JOIN DATESORTIE DS ON DS.idJeu = J.idJeu
+JOIN PLATEFORME P ON P.idPlateforme = DS.idPlateforme
+JOIN POPULARITE P1 ON P1.idJeu = J.idJeu
+WHERE P.idPlateforme = id_plateforme
+GROUP BY J.idJeu, J.titreJeu
+    ) t
+   WHERE t.rang <= 100;
+
+  RETURN v_json;
+END;
+/
 
 DROP TABLE LOG;
 
@@ -904,3 +1133,109 @@ BEGIN
   VALUES(user, 'DELETE', SYSTIMESTAMP, :OLD.IdJeu, NULL, ':OLD.IdJeu || ' || ' || :OLD.IdRegion || ' || ' || :OLD.TitreLocalise |', NULL, 'LOCALISATIONJEU');
 END;
 /
+
+DROP TABLE DEVELOPPEURJEU;
+DROP TABLE DEVELOPPEUR;
+DROP TABLE SERIEJEU;
+DROP TABLE SERIEE;
+DROP TABLE PERSPECTIVEJOUEURJEU;
+DROP TABLE PERSPECTIVEJOUEUR;
+DROP TABLE FRANCHISEJEU;
+DROP TABLE FRANCHISEE;
+DROP TABLE EDITEURJEU;
+DROP TABLE EDITEURE;
+
+CREATE TABLE DEVELOPPEUR (
+    idDeveloppeur NUMBER PRIMARY KEY,
+    nomDeveloppeur VARCHAR2(255)    
+);
+
+CREATE TABLE DEVELOPPEURJEU (
+    idDeveloppeur NUMBER,
+    idJeu NUMBER,
+    FOREIGN KEY (idDeveloppeur) REFERENCES Developpeur(idDeveloppeur),
+    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
+);
+
+CREATE TABLE SERIEE (
+    idSerie NUMBER PRIMARY KEY,
+    nomSerie VARCHAR2(255)    
+);
+
+CREATE TABLE SERIEJEU (
+    idSerie NUMBER,
+    idJeu NUMBER,
+    FOREIGN KEY (idSerie) REFERENCES SERIEE(idSerie),
+    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
+);
+
+CREATE TABLE PERSPECTIVEJOUEUR (
+    idPerspectiveJoueur NUMBER PRIMARY KEY,
+    nomPerspectiveJoueur VARCHAR2(255)    
+);
+
+CREATE TABLE PERSPECTIVEJOUEURJEU (
+    idPerspectiveJoueur NUMBER,
+    idJeu NUMBER,
+    FOREIGN KEY (idPerspectiveJoueur) REFERENCES PERSPECTIVEJOUEUR(idPerspectiveJoueur),
+    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
+);
+
+CREATE TABLE FRANCHISEE (
+    idFranchise NUMBER PRIMARY KEY,
+    nomFranchise VARCHAR2(255)    
+);
+
+CREATE TABLE FRANCHISEJEU (
+    idFranchise NUMBER,
+    idJeu NUMBER,
+    FOREIGN KEY (idFranchise) REFERENCES FRANCHISE(idFranchise),
+    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
+);
+
+CREATE TABLE EDITEURE (
+    idEditeur NUMBER PRIMARY KEY,
+    nomEditeur VARCHAR2(255)    
+);
+
+CREATE TABLE EDITEURJEU (
+    idEditeur NUMBER,
+    idJeu NUMBER,
+    FOREIGN KEY (idEditeur) REFERENCES EDITEURE(idEditeur),
+    FOREIGN KEY (idJeu) REFERENCES Jeu(idJeu)
+);
+SELECT * FROM GENREJEU GJ
+JOIN GENRE G ON G.idGenre = GJ.idGenre
+WHERE idJeu = 4035;
+
+// Donne Street FIGHTER II
+INSERT INTO EDITEURE (idEditeur, nomEditeur) VALUES (1, 'Capcom');
+INSERT INTO EDITEURE (idEditeur, nomEditeur) VALUES (2, 'Playtronic');
+INSERT INTO EDITEURJEU (idEditeur, idJeu) VALUES (1, 39306);
+INSERT INTO EDITEURJEU (idEditeur, idJeu) VALUES (2, 39306);
+INSERT INTO PERSPECTIVEJOUEUR (idPerspectiveJoueur, nomPerspectiveJoueur) VALUES (1, 'Side view');
+INSERT INTO PERSPECTIVEJOUEURJEU (idPerspectiveJoueur, idJeu) VALUES (1, 39306);
+INSERT INTO SERIEE (idSerie, nomSerie) VALUES (1, 'Street Fighter II');
+INSERT INTO SERIEE (idSerie, nomSerie) VALUES (2, 'Street Fighter');
+INSERT INTO SERIEJEU (idSerie, idJeu) VALUES (1, 39306);
+INSERT INTO SERIEJEU (idSerie, idJeu) VALUES (2, 39306);
+
+// Donnee Rapala Fishing Franzy 2009
+INSERT INTO DEVELOPPEUR (idDeveloppeur, nomDeveloppeur) VALUES (1, 'FUN Labs');
+INSERT INTO DEVELOPPEURJEU (idDeveloppeur, idJeu) VALUES (1, 7155);
+INSERT INTO EDITEURE (idEditeur, nomEditeur) VALUES (3, 'Activision');
+INSERT INTO EDITEURJEU (idEditeur, idJeu) VALUES (3, 7155);
+
+// Donnee NBA Street
+INSERT INTO DEVELOPPEUR (idDeveloppeur, nomDeveloppeur) VALUES (2, 'EA Canada');
+INSERT INTO DEVELOPPEUR (idDeveloppeur, nomDeveloppeur) VALUES (3, 'NuFX');
+INSERT INTO DEVELOPPEURJEU (idDeveloppeur, idJeu) VALUES (2, 4035);
+INSERT INTO DEVELOPPEURJEU (idDeveloppeur, idJeu) VALUES (3, 4035);
+INSERT INTO EDITEURE (idEditeur, nomEditeur) VALUES (4, 'EA Sports BIG');
+INSERT INTO EDITEURE (idEditeur, nomEditeur) VALUES (5, 'Square Electronic Arts');
+INSERT INTO EDITEURJEU (idEditeur, idJeu) VALUES (4, 4035);
+INSERT INTO EDITEURJEU (idEditeur, idJeu) VALUES (5, 4035);
+INSERT INTO PERSPECTIVEJOUEUR (idPerspectiveJoueur, nomPerspectiveJoueur) VALUES (2, 'Third person');
+INSERT INTO PERSPECTIVEJOUEURJEU (idPerspectiveJoueur, idJeu) VALUES (2, 4035);
+INSERT INTO SERIEE (idSerie, nomSerie) VALUES (3, 'NBA Street');
+INSERT INTO SERIEJEU (idSerie, idJeu) VALUES (3, 4035);
